@@ -2,6 +2,7 @@ package pl.ownedbylip.mylove;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.util.Log;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -20,6 +21,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 final class SupabaseClient {
+    private static final String TAG = "MyLoveSupabase";
     interface SyncCallback {
         void onSuccess(List<RemoteLetter> letters);
         void onError(String message);
@@ -129,11 +131,15 @@ final class SupabaseClient {
     private List<RemoteLetter> fetchLetters(String accessToken) throws Exception {
         String endpoint = BuildConfig.SUPABASE_URL
                 + "/rest/v1/letters"
-                + "?select=id,title,preview,body,date_label"
-                + "&order=published_at.desc";
+                + "?select=id,title,preview,body,date_label,published_at"
+                + "&published_at=lte.now()"
+                + "&order=published_at.desc"
+                + "&limit=500";
         HttpURLConnection connection = connection(endpoint, "GET");
         connection.setRequestProperty("Authorization", "Bearer " + accessToken);
+        connection.setRequestProperty("Cache-Control", "no-cache");
         JSONArray json = new JSONArray(readResponse(connection));
+        Log.d(TAG, "Geladene Cloud-Briefe: " + json.length());
         List<RemoteLetter> letters = new ArrayList<>();
         for (int i = 0; i < json.length(); i++) {
             JSONObject item = json.getJSONObject(i);

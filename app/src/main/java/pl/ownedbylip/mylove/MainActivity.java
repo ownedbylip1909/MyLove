@@ -9,6 +9,9 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
 import android.view.Window;
@@ -29,7 +32,9 @@ import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 
 public class MainActivity extends AppCompatActivity {
+    private static final String TAG = "MyLoveSync";
     private static final String UNLOCK_PIN = "2702";
+    private static final long SYNC_INTERVAL_MS = 15_000L;
 
     private LetterRepository repository;
     private SupabaseClient supabaseClient;
@@ -45,6 +50,18 @@ public class MainActivity extends AppCompatActivity {
     private int muted;
     private int card;
     private int wine;
+    private final Handler syncHandler = new Handler(Looper.getMainLooper());
+    private boolean mainScreenActive;
+    private boolean syncInProgress;
+    private final Runnable periodicSync = new Runnable() {
+        @Override
+        public void run() {
+            if (mainScreenActive) {
+                syncFromCloud();
+                syncHandler.postDelayed(this, SYNC_INTERVAL_MS);
+            }
+        }
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -187,7 +204,8 @@ public class MainActivity extends AppCompatActivity {
                     mainScreen.setTranslationY(dp(28));
                     showRoot(mainScreen);
                     renderLetters();
-                    syncFromCloud();
+                    mainScreenActive = true;
+                    startPeriodicSync();
                     mainScreen.animate()
                             .alpha(1f)
                             .translationY(0f)
@@ -198,14 +216,27 @@ public class MainActivity extends AppCompatActivity {
                 .start();
     }
 
+    private void startPeriodicSync() {
+        syncHandler.removeCallbacks(periodicSync);
+        syncFromCloud();
+        syncHandler.postDelayed(periodicSync, SYNC_INTERVAL_MS);
+    }
+
     private void syncFromCloud() {
+        if (!mainScreenActive || syncInProgress) {
+            return;
+        }
+        syncInProgress = true;
         supabaseClient.syncLetters(new SupabaseClient.SyncCallback() {
             @Override
             public void onSuccess(java.util.List<SupabaseClient.RemoteLetter> letters) {
                 int newLetters = repository.upsertRemoteLetters(letters);
                 runOnUiThread(() -> {
+                    syncInProgress = false;
                     cloudConnected = true;
-                    if (newLetters > 0 && selectedTab <= 1) {
+                    Log.d(TAG, "Synchronisiert: " + letters.size()
+                            + " Cloud-Briefe, " + newLetters + " neu");
+                    if (selectedTab <= 1) {
                         renderLetters();
                     } else if (selectedTab == 3) {
                         showTab(3, false);
@@ -215,9 +246,37 @@ public class MainActivity extends AppCompatActivity {
 
             @Override
             public void onError(String message) {
-                // Offline use remains available; connection state will be shown in "Mehr" later.
+                runOnUiThread(() -> {
+                    syncInProgress = false;
+                    cloudConnected = false;
+                    Log.e(TAG, "Synchronisierung fehlgeschlagen: " + message);
+                    if (selectedTab == 3) {
+                        showTab(3, false);
+                    }
+                });
             }
         });
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (mainScreenActive) {
+            startPeriodicSync();
+        }
+    }
+
+    @Override
+    protected void onPause() {
+        syncHandler.removeCallbacks(periodicSync);
+        super.onPause();
+    }
+
+    @Override
+    protected void onDestroy() {
+        syncHandler.removeCallbacks(periodicSync);
+        repository.close();
+        super.onDestroy();
     }
 
     private void startHeartPulse(View heart) {
