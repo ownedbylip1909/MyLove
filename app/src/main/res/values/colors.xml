@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="cream">#FFF9F4EC</color>
+    <color name="cream_dark">#FF181513</color>
+    <color name="wine">#FFA83DFF</color>
+    <color name="wine_light">#FFD9ACFF</color>
+    <color name="ink">#FF28201D</color>
+    <color name="ink_night">#FFF5EEE8</color>
+    <color name="muted">#FF786C67</color>
+    <color name="muted_night">#FFBDAFAA</color>
+    <color name="card">#FFFFFCF8</color>
+    <color name="card_night">#FF24201E</color>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+</resources>
