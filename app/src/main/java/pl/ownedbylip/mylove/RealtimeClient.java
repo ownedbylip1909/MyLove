@@ -15,6 +15,15 @@ import okhttp3.WebSocket;
 import okhttp3.WebSocketListener;
 
 final class RealtimeClient {
+    interface TokenCallback {
+        void onToken(String accessToken);
+        void onError();
+    }
+
+    interface TokenProvider {
+        void request(TokenCallback callback);
+    }
+
     interface Listener {
         void onLetterChanged();
         void onConnectionChanged(boolean connected);
@@ -25,12 +34,14 @@ final class RealtimeClient {
             .build();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final Listener listener;
+    private final TokenProvider tokenProvider;
     private WebSocket socket;
     private boolean stopped = true;
     private int reconnectAttempt;
 
-    RealtimeClient(Listener listener) {
+    RealtimeClient(Listener listener, TokenProvider tokenProvider) {
         this.listener = listener;
+        this.tokenProvider = tokenProvider;
     }
 
     void connect(String accessToken) {
@@ -57,24 +68,37 @@ final class RealtimeClient {
         listener.onConnectionChanged(false);
     }
 
-    private void scheduleReconnect(String accessToken) {
+    private void scheduleReconnect() {
         if (stopped) {
             return;
         }
         long delay = Math.min(30_000L, (1L << Math.min(reconnectAttempt++, 5)) * 1_000L);
         mainHandler.postDelayed(() -> {
             if (!stopped) {
-                Request request = new Request.Builder()
-                        .url(BuildConfig.SUPABASE_URL
-                                .replace("https://", "wss://")
-                                .replace("http://", "ws://")
-                                + "/realtime/v1/websocket?apikey="
-                                + BuildConfig.SUPABASE_PUBLISHABLE_KEY
-                                + "&vsn=1.0.0")
-                        .build();
-                socket = httpClient.newWebSocket(request, new SocketListener(accessToken));
+                tokenProvider.request(new TokenCallback() {
+                    @Override
+                    public void onToken(String accessToken) {
+                        if (!stopped) connectWithoutReset(accessToken);
+                    }
+
+                    @Override
+                    public void onError() {
+                        scheduleReconnect();
+                    }
+                });
             }
         }, delay);
+    }
+
+    private void connectWithoutReset(String accessToken) {
+        String websocketUrl = BuildConfig.SUPABASE_URL
+                .replace("https://", "wss://")
+                .replace("http://", "ws://")
+                + "/realtime/v1/websocket?apikey="
+                + BuildConfig.SUPABASE_PUBLISHABLE_KEY
+                + "&vsn=1.0.0";
+        Request request = new Request.Builder().url(websocketUrl).build();
+        socket = httpClient.newWebSocket(request, new SocketListener(accessToken));
     }
 
     private final class SocketListener extends WebSocketListener {
@@ -134,13 +158,13 @@ final class RealtimeClient {
         @Override
         public void onClosed(WebSocket webSocket, int code, String reason) {
             listener.onConnectionChanged(false);
-            scheduleReconnect(accessToken);
+            scheduleReconnect();
         }
 
         @Override
         public void onFailure(WebSocket webSocket, Throwable throwable, Response response) {
             listener.onConnectionChanged(false);
-            scheduleReconnect(accessToken);
+            scheduleReconnect();
         }
     }
 }

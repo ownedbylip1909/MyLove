@@ -8,6 +8,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
@@ -41,6 +42,20 @@ final class SupabaseClient {
         void onComplete(boolean success);
     }
 
+    interface DataCallback {
+        void onComplete(byte[] data);
+    }
+
+    static final class RemoteAttachment {
+        final String storagePath;
+        final String mimeType;
+
+        RemoteAttachment(String storagePath, String mimeType) {
+            this.storagePath = storagePath;
+            this.mimeType = mimeType;
+        }
+    }
+
     static final class RemoteLetter {
         final String id;
         final String title;
@@ -50,9 +65,11 @@ final class SupabaseClient {
         final String publishedAt;
         final boolean read;
         final String readAt;
+        final List<RemoteAttachment> attachments;
 
         RemoteLetter(String id, String title, String preview, String body, String dateLabel,
-                     String publishedAt, boolean read, String readAt) {
+                     String publishedAt, boolean read, String readAt,
+                     List<RemoteAttachment> attachments) {
             this.id = id;
             this.title = title;
             this.preview = preview;
@@ -61,6 +78,7 @@ final class SupabaseClient {
             this.publishedAt = publishedAt;
             this.read = read;
             this.readAt = readAt;
+            this.attachments = attachments;
         }
     }
 
@@ -133,6 +151,24 @@ final class SupabaseClient {
         letterAction("delete_letter", remoteId, callback);
     }
 
+    void downloadAttachment(String storagePath, DataCallback callback) {
+        executor.execute(() -> {
+            try {
+                String encodedPath = encodeStoragePath(storagePath);
+                HttpURLConnection connection = connection(
+                        BuildConfig.SUPABASE_URL
+                                + "/storage/v1/object/authenticated/letter-attachments/"
+                                + encodedPath,
+                        "GET");
+                connection.setRequestProperty(
+                        "Authorization", "Bearer " + validAccessToken());
+                callback.onComplete(readBytes(connection));
+            } catch (Exception exception) {
+                callback.onComplete(null);
+            }
+        });
+    }
+
     void shutdown() {
         executor.shutdownNow();
     }
@@ -149,6 +185,7 @@ final class SupabaseClient {
                         validAccessToken());
                 callback.onComplete(true);
             } catch (Exception exception) {
+                Log.e(TAG, "RPC " + function + " fehlgeschlagen", exception);
                 callback.onComplete(false);
             }
         });
@@ -190,7 +227,8 @@ final class SupabaseClient {
     private List<RemoteLetter> fetchLetters(String accessToken) throws Exception {
         String endpoint = BuildConfig.SUPABASE_URL
                 + "/rest/v1/letters"
-                + "?select=id,title,preview,body,date_label,published_at,is_read,read_at,archived_at"
+                + "?select=id,title,preview,body,date_label,published_at,is_read,read_at,"
+                + "archived_at,letter_attachments(storage_path,mime_type)"
                 + "&published_at=lte.now()"
                 + "&archived_at=is.null"
                 + "&deleted_at=is.null"
@@ -204,6 +242,16 @@ final class SupabaseClient {
         List<RemoteLetter> letters = new ArrayList<>();
         for (int i = 0; i < json.length(); i++) {
             JSONObject item = json.getJSONObject(i);
+            List<RemoteAttachment> attachments = new ArrayList<>();
+            JSONArray attachmentRows = item.optJSONArray("letter_attachments");
+            if (attachmentRows != null) {
+                for (int j = 0; j < attachmentRows.length(); j++) {
+                    JSONObject attachment = attachmentRows.getJSONObject(j);
+                    attachments.add(new RemoteAttachment(
+                            attachment.getString("storage_path"),
+                            attachment.optString("mime_type", "image/jpeg")));
+                }
+            }
             letters.add(new RemoteLetter(
                     item.getString("id"),
                     item.getString("title"),
@@ -212,7 +260,8 @@ final class SupabaseClient {
                     item.optString("date_label", "NEU"),
                     item.optString("published_at", ""),
                     item.optBoolean("is_read", false),
-                    item.optString("read_at", null)
+                    item.optString("read_at", null),
+                    attachments
             ));
         }
         return letters;
@@ -277,5 +326,40 @@ final class SupabaseClient {
             throw new IllegalStateException("Supabase HTTP " + status + ": " + response);
         }
         return response.toString();
+    }
+
+    private byte[] readBytes(HttpURLConnection connection) throws Exception {
+        int status = connection.getResponseCode();
+        InputStream stream = status >= 200 && status < 300
+                ? connection.getInputStream()
+                : connection.getErrorStream();
+        byte[] result = null;
+        if (stream != null) {
+            try (InputStream input = stream;
+                 ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+                byte[] buffer = new byte[8192];
+                int count;
+                while ((count = input.read(buffer)) != -1) {
+                    output.write(buffer, 0, count);
+                }
+                result = output.toByteArray();
+            }
+        }
+        connection.disconnect();
+        if (status < 200 || status >= 300) {
+            throw new IllegalStateException("Supabase storage HTTP " + status);
+        }
+        return result;
+    }
+
+    private String encodeStoragePath(String path) throws Exception {
+        String[] segments = path.split("/");
+        StringBuilder encoded = new StringBuilder();
+        for (String segment : segments) {
+            if (encoded.length() > 0) encoded.append('/');
+            encoded.append(java.net.URLEncoder.encode(
+                    segment, "UTF-8").replace("+", "%20"));
+        }
+        return encoded.toString();
     }
 }

@@ -40,6 +40,9 @@
     <string name="cancel">Abbrechen</string>
     <string name="archived">Brief archiviert</string>
     <string name="deleted">Brief gelöscht</string>
+    <string name="attachments">ANHÄNGE</string>
+    <string name="letter_image">Bildanhang des Briefes</string>
+    <string name="cloud_action_failed">Die Änderung konnte nicht synchronisiert werden. Bitte versuche es erneut.</string>
     <string name="privacy_title">Privat &amp; offline</string>
     <string name="privacy_text">Briefe bleiben aktuell ausschließlich auf diesem Gerät gespeichert.</string>
     <string name="privacy_sync">Briefe werden geschützt synchronisiert und bleiben offline verfügbar.</string>

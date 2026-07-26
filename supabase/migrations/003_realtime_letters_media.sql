@@ -18,6 +18,7 @@ create index if not exists letters_recipient_visible_idx
 
 drop policy if exists "owners read their letters" on public.letters;
 drop policy if exists "recipient reads published mailbox letters" on public.letters;
+drop policy if exists "recipient reads visible published letters" on public.letters;
 create policy "recipient reads visible published letters"
 on public.letters for select to authenticated
 using (

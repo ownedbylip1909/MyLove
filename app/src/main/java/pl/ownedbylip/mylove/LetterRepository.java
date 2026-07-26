@@ -11,7 +11,7 @@ import java.util.List;
 
 final class LetterRepository extends SQLiteOpenHelper {
     private static final String DATABASE_NAME = "letters.db";
-    private static final int DATABASE_VERSION = 3;
+    private static final int DATABASE_VERSION = 5;
 
     LetterRepository(Context context) {
         super(context, DATABASE_NAME, null, DATABASE_VERSION);
@@ -29,18 +29,7 @@ final class LetterRepository extends SQLiteOpenHelper {
                 "published_at TEXT NOT NULL," +
                 "is_archived INTEGER NOT NULL DEFAULT 0," +
                 "is_unread INTEGER NOT NULL DEFAULT 1)");
-        insert(db, "Für heute",
-                "Nur eine kleine Erinnerung …",
-                "Du musst heute nichts lösen und keine Antwort finden. Ich wollte dir nur sagen, dass du mir wichtig bist – auch an den schwierigen Tagen.",
-                "HEUTE");
-        insert(db, "Was ich an dir sehe",
-                "Die kleinen Dinge sind oft die größten.",
-                "Ich sehe deine Art, wie du dich um andere kümmerst. Dein Lachen, deine Stärke und auch die leisen Seiten an dir. Vieles davon sage ich vermutlich zu selten.",
-                "EIN ERSTER BRIEF");
-        insert(db, "Kein perfekter Moment",
-                "Aber ein ehrlicher.",
-                "Zwischen uns war es nicht immer leicht. Diese App soll nichts ungeschehen machen. Sie soll dir nur zeigen, dass ich zuhöre, nachdenke und dass mir etwas an uns liegt.",
-                "VON HERZEN");
+        createAttachmentsTable(db);
     }
 
     @Override
@@ -55,16 +44,21 @@ final class LetterRepository extends SQLiteOpenHelper {
             db.execSQL("UPDATE letters SET published_at = " +
                     "printf('2000-01-01T00:00:%02dZ', id) WHERE published_at IS NULL");
         }
+        if (oldVersion < 4) {
+            createAttachmentsTable(db);
+        }
+        if (oldVersion < 5) {
+            db.delete("letters", "remote_id IS NULL", null);
+        }
     }
 
-    private void insert(SQLiteDatabase db, String title, String preview, String body, String date) {
-        ContentValues values = new ContentValues();
-        values.put("title", title);
-        values.put("preview", preview);
-        values.put("body", body);
-        values.put("date_label", date);
-        values.put("published_at", java.time.Instant.now().toString());
-        db.insertOrThrow("letters", null, values);
+    private void createAttachmentsTable(SQLiteDatabase db) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS letter_attachments (" +
+                "storage_path TEXT PRIMARY KEY," +
+                "letter_remote_id TEXT NOT NULL," +
+                "mime_type TEXT NOT NULL)");
+        db.execSQL("CREATE INDEX IF NOT EXISTS attachment_letter_idx " +
+                "ON letter_attachments(letter_remote_id)");
     }
 
     List<Letter> getLetters() {
@@ -73,15 +67,17 @@ final class LetterRepository extends SQLiteOpenHelper {
                 "letters", null, "is_archived = 0", null, null, null,
                 "published_at DESC, id DESC")) {
             while (cursor.moveToNext()) {
+                String remoteId = cursor.getString(cursor.getColumnIndexOrThrow("remote_id"));
                 letters.add(new Letter(
                         cursor.getLong(cursor.getColumnIndexOrThrow("id")),
-                        cursor.getString(cursor.getColumnIndexOrThrow("remote_id")),
+                        remoteId,
                         cursor.getString(cursor.getColumnIndexOrThrow("title")),
                         cursor.getString(cursor.getColumnIndexOrThrow("preview")),
                         cursor.getString(cursor.getColumnIndexOrThrow("body")),
                         cursor.getString(cursor.getColumnIndexOrThrow("date_label")),
                         cursor.getString(cursor.getColumnIndexOrThrow("published_at")),
-                        cursor.getInt(cursor.getColumnIndexOrThrow("is_unread")) == 1
+                        cursor.getInt(cursor.getColumnIndexOrThrow("is_unread")) == 1,
+                        getAttachments(remoteId)
                 ));
             }
         }
@@ -118,12 +114,60 @@ final class LetterRepository extends SQLiteOpenHelper {
                     }
                     db.update("letters", updates, "remote_id = ?", new String[]{letter.id});
                 }
+                db.delete("letter_attachments", "letter_remote_id = ?",
+                        new String[]{letter.id});
+                for (SupabaseClient.RemoteAttachment attachment : letter.attachments) {
+                    ContentValues attachmentValues = new ContentValues();
+                    attachmentValues.put("storage_path", attachment.storagePath);
+                    attachmentValues.put("letter_remote_id", letter.id);
+                    attachmentValues.put("mime_type", attachment.mimeType);
+                    db.insertWithOnConflict("letter_attachments", null,
+                            attachmentValues, SQLiteDatabase.CONFLICT_REPLACE);
+                }
             }
+            reconcileRemoteLetters(db, remoteLetters);
             db.setTransactionSuccessful();
         } finally {
             db.endTransaction();
         }
         return changed;
+    }
+
+    private List<Letter.Attachment> getAttachments(String remoteId) {
+        List<Letter.Attachment> attachments = new ArrayList<>();
+        if (remoteId == null) {
+            return attachments;
+        }
+        try (Cursor cursor = getReadableDatabase().query(
+                "letter_attachments",
+                new String[]{"storage_path", "mime_type"},
+                "letter_remote_id = ?", new String[]{remoteId},
+                null, null, "storage_path")) {
+            while (cursor.moveToNext()) {
+                attachments.add(new Letter.Attachment(
+                        cursor.getString(0), cursor.getString(1)));
+            }
+        }
+        return attachments;
+    }
+
+    private void reconcileRemoteLetters(
+            SQLiteDatabase db, List<SupabaseClient.RemoteLetter> remoteLetters) {
+        if (remoteLetters.isEmpty()) {
+            db.delete("letter_attachments", null, null);
+            db.delete("letters", "remote_id IS NOT NULL", null);
+            return;
+        }
+        StringBuilder placeholders = new StringBuilder();
+        String[] ids = new String[remoteLetters.size()];
+        for (int i = 0; i < remoteLetters.size(); i++) {
+            if (i > 0) placeholders.append(',');
+            placeholders.append('?');
+            ids[i] = remoteLetters.get(i).id;
+        }
+        String missing = " NOT IN (" + placeholders + ")";
+        db.delete("letter_attachments", "letter_remote_id" + missing, ids);
+        db.delete("letters", "remote_id IS NOT NULL AND remote_id" + missing, ids);
     }
 
     void markRead(long id) {

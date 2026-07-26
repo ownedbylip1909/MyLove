@@ -5,7 +5,8 @@ plugins {
 }
 
 val localProperties = Properties().apply {
-    rootProject.file("local.properties").inputStream().use { load(it) }
+    rootProject.file("local.properties").takeIf { it.isFile }
+        ?.inputStream()?.use { load(it) }
 }
 
 android {
@@ -18,7 +19,7 @@ android {
 
     defaultConfig {
         applicationId = "pl.ownedbylip.mylove"
-        minSdk = 36
+        minSdk = 26
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"

@@ -6,6 +6,7 @@ import android.animation.ValueAnimator;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.graphics.Color;
+import android.graphics.BitmapFactory;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
@@ -13,10 +14,12 @@ import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
 import android.view.Window;
+import android.view.WindowManager;
 import android.view.animation.AccelerateDecelerateInterpolator;
 import android.view.animation.DecelerateInterpolator;
 import android.widget.Button;
 import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -68,13 +71,24 @@ public class MainActivity extends AppCompatActivity {
             public void onConnectionChanged(boolean connected) {
                 // REST connectivity remains the source of truth for the visible status.
             }
-        });
+        }, callback -> supabaseClient.requestAccessToken(new SupabaseClient.TokenCallback() {
+            @Override
+            public void onSuccess(String accessToken) {
+                callback.onToken(accessToken);
+            }
+
+            @Override
+            public void onError() {
+                callback.onError();
+            }
+        }));
         ink = color(com.google.android.material.R.attr.colorOnBackground);
         muted = ContextCompat.getColor(this, isNight() ? R.color.muted_night : R.color.muted);
         card = ContextCompat.getColor(this, isNight() ? R.color.card_night : R.color.card);
         wine = ContextCompat.getColor(this, isNight() ? R.color.wine_light : R.color.wine);
 
         Window window = getWindow();
+        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE);
         WindowCompat.setDecorFitsSystemWindows(window, false);
         showRoot(buildLockScreen());
     }
@@ -776,6 +790,16 @@ public class MainActivity extends AppCompatActivity {
         bodyParams.topMargin = dp(18);
         bodyParams.bottomMargin = dp(10);
         content.addView(body, bodyParams);
+        if (!letter.attachments.isEmpty()) {
+            TextView attachmentTitle = text(
+                    getString(R.string.attachments), 15, wine, Typeface.BOLD);
+            LinearLayout.LayoutParams attachmentTitleParams = wrapWrap();
+            attachmentTitleParams.topMargin = dp(18);
+            content.addView(attachmentTitle, attachmentTitleParams);
+            for (Letter.Attachment attachment : letter.attachments) {
+                addAttachment(content, attachment);
+            }
+        }
 
         AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle(letter.title)
@@ -791,10 +815,20 @@ public class MainActivity extends AppCompatActivity {
         Button archive = dialog.getButton(AlertDialog.BUTTON_NEUTRAL);
         archive.setTextColor(wine);
         archive.setOnClickListener(view -> {
-            repository.archive(letter.id);
-            supabaseClient.archiveLetter(letter.remoteId, success -> { });
-            Toast.makeText(this, R.string.archived, Toast.LENGTH_SHORT).show();
-            dialog.dismiss();
+            archive.setEnabled(false);
+            supabaseClient.archiveLetter(letter.remoteId, success ->
+                    runOnUiThread(() -> {
+                        if (success) {
+                            repository.archive(letter.id);
+                            Toast.makeText(this, R.string.archived,
+                                    Toast.LENGTH_SHORT).show();
+                            dialog.dismiss();
+                        } else {
+                            archive.setEnabled(true);
+                            Toast.makeText(this, R.string.cloud_action_failed,
+                                    Toast.LENGTH_LONG).show();
+                        }
+                    }));
         });
         Button delete = dialog.getButton(AlertDialog.BUTTON_NEGATIVE);
         delete.setTextColor(ContextCompat.getColor(this, android.R.color.holo_red_light));
@@ -807,12 +841,38 @@ public class MainActivity extends AppCompatActivity {
                 .setMessage(R.string.delete_message)
                 .setNegativeButton(R.string.cancel, null)
                 .setPositiveButton(R.string.delete, (dialog, which) -> {
-                    repository.delete(letter.id);
-                    supabaseClient.deleteLetter(letter.remoteId, success -> { });
-                    Toast.makeText(this, R.string.deleted, Toast.LENGTH_SHORT).show();
-                    letterDialog.dismiss();
+                    supabaseClient.deleteLetter(letter.remoteId, success ->
+                            runOnUiThread(() -> {
+                                if (success) {
+                                    repository.delete(letter.id);
+                                    Toast.makeText(this, R.string.deleted,
+                                            Toast.LENGTH_SHORT).show();
+                                    letterDialog.dismiss();
+                                } else {
+                                    Toast.makeText(this, R.string.cloud_action_failed,
+                                            Toast.LENGTH_LONG).show();
+                                }
+                            }));
                 })
                 .show();
+    }
+
+    private void addAttachment(LinearLayout content, Letter.Attachment attachment) {
+        ImageView image = new ImageView(this);
+        image.setAdjustViewBounds(true);
+        image.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        image.setContentDescription(getString(R.string.letter_image));
+        image.setBackgroundColor(isNight() ? 0xFF3A3431 : 0xFFEDE3D9);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(220));
+        params.topMargin = dp(10);
+        content.addView(image, params);
+        supabaseClient.downloadAttachment(attachment.storagePath, data ->
+                runOnUiThread(() -> {
+                    if (data == null || isFinishing() || isDestroyed()) return;
+                    var bitmap = BitmapFactory.decodeByteArray(data, 0, data.length);
+                    if (bitmap != null) image.setImageBitmap(bitmap);
+                }));
     }
 
     private TextView text(String value, float size, int color, int style) {
