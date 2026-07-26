@@ -9,8 +9,6 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
-import android.os.Handler;
-import android.os.Looper;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
@@ -31,13 +29,15 @@ import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 
+import java.util.Locale;
+
 public class MainActivity extends AppCompatActivity {
     private static final String TAG = "MyLoveSync";
     private static final String UNLOCK_PIN = "2702";
-    private static final long SYNC_INTERVAL_MS = 15_000L;
 
     private LetterRepository repository;
     private SupabaseClient supabaseClient;
+    private RealtimeClient realtimeClient;
     private LinearLayout letterList;
     private FrameLayout tabContent;
     private TextView[] tabButtons;
@@ -50,24 +50,25 @@ public class MainActivity extends AppCompatActivity {
     private int muted;
     private int card;
     private int wine;
-    private final Handler syncHandler = new Handler(Looper.getMainLooper());
     private boolean mainScreenActive;
     private boolean syncInProgress;
-    private final Runnable periodicSync = new Runnable() {
-        @Override
-        public void run() {
-            if (mainScreenActive) {
-                syncFromCloud();
-                syncHandler.postDelayed(this, SYNC_INTERVAL_MS);
-            }
-        }
-    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         repository = new LetterRepository(this);
         supabaseClient = new SupabaseClient(this);
+        realtimeClient = new RealtimeClient(new RealtimeClient.Listener() {
+            @Override
+            public void onLetterChanged() {
+                runOnUiThread(() -> syncFromCloud());
+            }
+
+            @Override
+            public void onConnectionChanged(boolean connected) {
+                // REST connectivity remains the source of truth for the visible status.
+            }
+        });
         ink = color(com.google.android.material.R.attr.colorOnBackground);
         muted = ContextCompat.getColor(this, isNight() ? R.color.muted_night : R.color.muted);
         card = ContextCompat.getColor(this, isNight() ? R.color.card_night : R.color.card);
@@ -205,7 +206,7 @@ public class MainActivity extends AppCompatActivity {
                     showRoot(mainScreen);
                     renderLetters();
                     mainScreenActive = true;
-                    startPeriodicSync();
+                    startRealtime();
                     mainScreen.animate()
                             .alpha(1f)
                             .translationY(0f)
@@ -216,10 +217,19 @@ public class MainActivity extends AppCompatActivity {
                 .start();
     }
 
-    private void startPeriodicSync() {
-        syncHandler.removeCallbacks(periodicSync);
+    private void startRealtime() {
         syncFromCloud();
-        syncHandler.postDelayed(periodicSync, SYNC_INTERVAL_MS);
+        supabaseClient.requestAccessToken(new SupabaseClient.TokenCallback() {
+            @Override
+            public void onSuccess(String accessToken) {
+                realtimeClient.connect(accessToken);
+            }
+
+            @Override
+            public void onError() {
+                // Initial REST sync already exposes the offline state.
+            }
+        });
     }
 
     private void syncFromCloud() {
@@ -262,19 +272,20 @@ public class MainActivity extends AppCompatActivity {
     protected void onResume() {
         super.onResume();
         if (mainScreenActive) {
-            startPeriodicSync();
+            startRealtime();
         }
     }
 
     @Override
     protected void onPause() {
-        syncHandler.removeCallbacks(periodicSync);
+        realtimeClient.stop();
         super.onPause();
     }
 
     @Override
     protected void onDestroy() {
-        syncHandler.removeCallbacks(periodicSync);
+        realtimeClient.stop();
+        supabaseClient.shutdown();
         repository.close();
         super.onDestroy();
     }
@@ -462,7 +473,8 @@ public class MainActivity extends AppCompatActivity {
         ScrollView scroll = baseScroll();
         LinearLayout content = pageContent();
         scroll.addView(content, matchWrap());
-        content.addView(pageEyebrow(getString(R.string.tab_letters).toUpperCase()));
+        content.addView(pageEyebrow(
+                getString(R.string.tab_letters).toUpperCase(Locale.getDefault())));
         TextView title = text(getString(R.string.letters_title), 34, ink, Typeface.BOLD);
         LinearLayout.LayoutParams titleParams = wrapWrap();
         titleParams.topMargin = dp(10);
@@ -482,7 +494,8 @@ public class MainActivity extends AppCompatActivity {
         ScrollView scroll = baseScroll();
         LinearLayout content = pageContent();
         scroll.addView(content, matchWrap());
-        content.addView(pageEyebrow(getString(R.string.tab_memories).toUpperCase()));
+        content.addView(pageEyebrow(
+                getString(R.string.tab_memories).toUpperCase(Locale.getDefault())));
         TextView title = text(getString(R.string.memories_title), 34, ink, Typeface.BOLD);
         LinearLayout.LayoutParams titleParams = wrapWrap();
         titleParams.topMargin = dp(10);
@@ -504,7 +517,8 @@ public class MainActivity extends AppCompatActivity {
         ScrollView scroll = baseScroll();
         LinearLayout content = pageContent();
         scroll.addView(content, matchWrap());
-        content.addView(pageEyebrow(getString(R.string.tab_more).toUpperCase()));
+        content.addView(pageEyebrow(
+                getString(R.string.tab_more).toUpperCase(Locale.getDefault())));
         TextView title = text(getString(R.string.more_title), 34, ink, Typeface.BOLD);
         LinearLayout.LayoutParams titleParams = wrapWrap();
         titleParams.topMargin = dp(10);
@@ -567,6 +581,20 @@ public class MainActivity extends AppCompatActivity {
                     LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
             validityParams.topMargin = dp(7);
             box.addView(validity, validityParams);
+
+            Button renew = new Button(this);
+            renew.setAllCaps(false);
+            renew.setText(R.string.pairing_new);
+            renew.setTextColor(wine);
+            renew.setBackgroundTintList(android.content.res.ColorStateList.valueOf(card));
+            renew.setOnClickListener(view -> {
+                pairingCode = null;
+                requestPairingCode();
+            });
+            LinearLayout.LayoutParams renewParams = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, dp(52));
+            renewParams.topMargin = dp(10);
+            box.addView(renew, renewParams);
         } else {
             Button create = new Button(this);
             create.setAllCaps(false);
@@ -731,6 +759,11 @@ public class MainActivity extends AppCompatActivity {
 
     private void openLetter(Letter letter) {
         repository.markRead(letter.id);
+        supabaseClient.markLetterRead(letter.remoteId, success -> {
+            if (!success) {
+                Log.w(TAG, "Lesestatus wird beim nächsten Öffnen erneut versucht");
+            }
+        });
         LinearLayout content = new LinearLayout(this);
         content.setOrientation(LinearLayout.VERTICAL);
         content.setPadding(dp(26), dp(12), dp(26), dp(4));
@@ -748,11 +781,38 @@ public class MainActivity extends AppCompatActivity {
                 .setTitle(letter.title)
                 .setView(content)
                 .setPositiveButton(R.string.close, null)
+                .setNeutralButton(R.string.archive, null)
+                .setNegativeButton(R.string.delete, null)
                 .create();
         dialog.setOnDismissListener(ignored -> renderLetters());
         dialog.show();
         Button button = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
         button.setTextColor(wine);
+        Button archive = dialog.getButton(AlertDialog.BUTTON_NEUTRAL);
+        archive.setTextColor(wine);
+        archive.setOnClickListener(view -> {
+            repository.archive(letter.id);
+            supabaseClient.archiveLetter(letter.remoteId, success -> { });
+            Toast.makeText(this, R.string.archived, Toast.LENGTH_SHORT).show();
+            dialog.dismiss();
+        });
+        Button delete = dialog.getButton(AlertDialog.BUTTON_NEGATIVE);
+        delete.setTextColor(ContextCompat.getColor(this, android.R.color.holo_red_light));
+        delete.setOnClickListener(view -> confirmDelete(letter, dialog));
+    }
+
+    private void confirmDelete(Letter letter, AlertDialog letterDialog) {
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.delete_title)
+                .setMessage(R.string.delete_message)
+                .setNegativeButton(R.string.cancel, null)
+                .setPositiveButton(R.string.delete, (dialog, which) -> {
+                    repository.delete(letter.id);
+                    supabaseClient.deleteLetter(letter.remoteId, success -> { });
+                    Toast.makeText(this, R.string.deleted, Toast.LENGTH_SHORT).show();
+                    letterDialog.dismiss();
+                })
+                .show();
     }
 
     private TextView text(String value, float size, int color, int style) {

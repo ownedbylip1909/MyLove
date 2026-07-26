@@ -32,19 +32,35 @@ final class SupabaseClient {
         void onError(String message);
     }
 
+    interface TokenCallback {
+        void onSuccess(String accessToken);
+        void onError();
+    }
+
+    interface ActionCallback {
+        void onComplete(boolean success);
+    }
+
     static final class RemoteLetter {
         final String id;
         final String title;
         final String preview;
         final String body;
         final String dateLabel;
+        final String publishedAt;
+        final boolean read;
+        final String readAt;
 
-        RemoteLetter(String id, String title, String preview, String body, String dateLabel) {
+        RemoteLetter(String id, String title, String preview, String body, String dateLabel,
+                     String publishedAt, boolean read, String readAt) {
             this.id = id;
             this.title = title;
             this.preview = preview;
             this.body = body;
             this.dateLabel = dateLabel;
+            this.publishedAt = publishedAt;
+            this.read = read;
+            this.readAt = readAt;
         }
     }
 
@@ -95,6 +111,49 @@ final class SupabaseClient {
         });
     }
 
+    void requestAccessToken(TokenCallback callback) {
+        executor.execute(() -> {
+            try {
+                callback.onSuccess(validAccessToken());
+            } catch (Exception exception) {
+                callback.onError();
+            }
+        });
+    }
+
+    void markLetterRead(String remoteId, ActionCallback callback) {
+        letterAction("mark_letter_read", remoteId, callback);
+    }
+
+    void archiveLetter(String remoteId, ActionCallback callback) {
+        letterAction("archive_letter", remoteId, callback);
+    }
+
+    void deleteLetter(String remoteId, ActionCallback callback) {
+        letterAction("delete_letter", remoteId, callback);
+    }
+
+    void shutdown() {
+        executor.shutdownNow();
+    }
+
+    private void letterAction(String function, String remoteId, ActionCallback callback) {
+        if (remoteId == null) {
+            callback.onComplete(true);
+            return;
+        }
+        executor.execute(() -> {
+            try {
+                callRpc(function,
+                        new JSONObject().put("letter_id", remoteId),
+                        validAccessToken());
+                callback.onComplete(true);
+            } catch (Exception exception) {
+                callback.onComplete(false);
+            }
+        });
+    }
+
     private String validAccessToken() throws Exception {
         String accessToken = preferences.getString(ACCESS_TOKEN, null);
         long expiresAt = preferences.getLong(EXPIRES_AT, 0);
@@ -131,8 +190,10 @@ final class SupabaseClient {
     private List<RemoteLetter> fetchLetters(String accessToken) throws Exception {
         String endpoint = BuildConfig.SUPABASE_URL
                 + "/rest/v1/letters"
-                + "?select=id,title,preview,body,date_label,published_at"
+                + "?select=id,title,preview,body,date_label,published_at,is_read,read_at,archived_at"
                 + "&published_at=lte.now()"
+                + "&archived_at=is.null"
+                + "&deleted_at=is.null"
                 + "&order=published_at.desc"
                 + "&limit=500";
         HttpURLConnection connection = connection(endpoint, "GET");
@@ -148,7 +209,10 @@ final class SupabaseClient {
                     item.getString("title"),
                     item.optString("preview", ""),
                     item.getString("body"),
-                    item.optString("date_label", "NEU")
+                    item.optString("date_label", "NEU"),
+                    item.optString("published_at", ""),
+                    item.optBoolean("is_read", false),
+                    item.optString("read_at", null)
             ));
         }
         return letters;

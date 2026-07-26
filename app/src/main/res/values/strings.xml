@@ -32,6 +32,14 @@
     <string name="pairing_validity">Einmal verwendbar · 30 Minuten gültig</string>
     <string name="pairing_error">Code konnte nicht erstellt werden. Prüfe die Verbindung und versuche es erneut.</string>
     <string name="pairing_copied">Pairing-Code kopiert</string>
+    <string name="pairing_new">Neuen Code erstellen</string>
+    <string name="archive">Archivieren</string>
+    <string name="delete">Löschen</string>
+    <string name="delete_title">Brief löschen?</string>
+    <string name="delete_message">Der Brief wird auf diesem Gerät und online entfernt.</string>
+    <string name="cancel">Abbrechen</string>
+    <string name="archived">Brief archiviert</string>
+    <string name="deleted">Brief gelöscht</string>
     <string name="privacy_title">Privat &amp; offline</string>
     <string name="privacy_text">Briefe bleiben aktuell ausschließlich auf diesem Gerät gespeichert.</string>
     <string name="privacy_sync">Briefe werden geschützt synchronisiert und bleiben offline verfügbar.</string>

@@ -53,6 +53,7 @@ android {
 }
 
 dependencies {
+    implementation(libs.okhttp)
     implementation(libs.androidx.appcompat)
     implementation(libs.androidx.core.ktx)
     implementation(libs.material)

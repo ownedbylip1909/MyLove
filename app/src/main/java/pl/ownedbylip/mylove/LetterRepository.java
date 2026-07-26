@@ -11,7 +11,7 @@ import java.util.List;
 
 final class LetterRepository extends SQLiteOpenHelper {
     private static final String DATABASE_NAME = "letters.db";
-    private static final int DATABASE_VERSION = 2;
+    private static final int DATABASE_VERSION = 3;
 
     LetterRepository(Context context) {
         super(context, DATABASE_NAME, null, DATABASE_VERSION);
@@ -26,6 +26,8 @@ final class LetterRepository extends SQLiteOpenHelper {
                 "preview TEXT NOT NULL," +
                 "body TEXT NOT NULL," +
                 "date_label TEXT NOT NULL," +
+                "published_at TEXT NOT NULL," +
+                "is_archived INTEGER NOT NULL DEFAULT 0," +
                 "is_unread INTEGER NOT NULL DEFAULT 1)");
         insert(db, "Für heute",
                 "Nur eine kleine Erinnerung …",
@@ -47,6 +49,12 @@ final class LetterRepository extends SQLiteOpenHelper {
             db.execSQL("ALTER TABLE letters ADD COLUMN remote_id TEXT");
             db.execSQL("CREATE UNIQUE INDEX letters_remote_id_idx ON letters(remote_id)");
         }
+        if (oldVersion < 3) {
+            db.execSQL("ALTER TABLE letters ADD COLUMN published_at TEXT");
+            db.execSQL("ALTER TABLE letters ADD COLUMN is_archived INTEGER NOT NULL DEFAULT 0");
+            db.execSQL("UPDATE letters SET published_at = " +
+                    "printf('2000-01-01T00:00:%02dZ', id) WHERE published_at IS NULL");
+        }
     }
 
     private void insert(SQLiteDatabase db, String title, String preview, String body, String date) {
@@ -55,13 +63,15 @@ final class LetterRepository extends SQLiteOpenHelper {
         values.put("preview", preview);
         values.put("body", body);
         values.put("date_label", date);
+        values.put("published_at", java.time.Instant.now().toString());
         db.insertOrThrow("letters", null, values);
     }
 
     List<Letter> getLetters() {
         List<Letter> letters = new ArrayList<>();
         try (Cursor cursor = getReadableDatabase().query(
-                "letters", null, null, null, null, null, "id DESC")) {
+                "letters", null, "is_archived = 0", null, null, null,
+                "published_at DESC, id DESC")) {
             while (cursor.moveToNext()) {
                 letters.add(new Letter(
                         cursor.getLong(cursor.getColumnIndexOrThrow("id")),
@@ -70,6 +80,7 @@ final class LetterRepository extends SQLiteOpenHelper {
                         cursor.getString(cursor.getColumnIndexOrThrow("preview")),
                         cursor.getString(cursor.getColumnIndexOrThrow("body")),
                         cursor.getString(cursor.getColumnIndexOrThrow("date_label")),
+                        cursor.getString(cursor.getColumnIndexOrThrow("published_at")),
                         cursor.getInt(cursor.getColumnIndexOrThrow("is_unread")) == 1
                 ));
             }
@@ -89,7 +100,8 @@ final class LetterRepository extends SQLiteOpenHelper {
                 values.put("preview", letter.preview);
                 values.put("body", letter.body);
                 values.put("date_label", letter.dateLabel);
-                values.put("is_unread", 1);
+                values.put("published_at", letter.publishedAt);
+                values.put("is_unread", letter.read ? 0 : 1);
                 long result = db.insertWithOnConflict(
                         "letters", null, values, SQLiteDatabase.CONFLICT_IGNORE);
                 if (result != -1) {
@@ -100,6 +112,10 @@ final class LetterRepository extends SQLiteOpenHelper {
                     updates.put("preview", letter.preview);
                     updates.put("body", letter.body);
                     updates.put("date_label", letter.dateLabel);
+                    updates.put("published_at", letter.publishedAt);
+                    if (letter.read) {
+                        updates.put("is_unread", 0);
+                    }
                     db.update("letters", updates, "remote_id = ?", new String[]{letter.id});
                 }
             }
@@ -114,5 +130,17 @@ final class LetterRepository extends SQLiteOpenHelper {
         ContentValues values = new ContentValues();
         values.put("is_unread", 0);
         getWritableDatabase().update("letters", values, "id = ?", new String[]{String.valueOf(id)});
+    }
+
+    void archive(long id) {
+        ContentValues values = new ContentValues();
+        values.put("is_archived", 1);
+        getWritableDatabase().update(
+                "letters", values, "id = ?", new String[]{String.valueOf(id)});
+    }
+
+    void delete(long id) {
+        getWritableDatabase().delete(
+                "letters", "id = ?", new String[]{String.valueOf(id)});
     }
 }

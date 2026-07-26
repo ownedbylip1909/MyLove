@@ -7,15 +7,18 @@ final class Letter {
     final String preview;
     final String body;
     final String dateLabel;
+    final String publishedAt;
     final boolean unread;
 
-    Letter(long id, String remoteId, String title, String preview, String body, String dateLabel, boolean unread) {
+    Letter(long id, String remoteId, String title, String preview, String body,
+           String dateLabel, String publishedAt, boolean unread) {
         this.id = id;
         this.remoteId = remoteId;
         this.title = title;
         this.preview = preview;
         this.body = body;
         this.dateLabel = dateLabel;
+        this.publishedAt = publishedAt;
         this.unread = unread;
     }
 }
